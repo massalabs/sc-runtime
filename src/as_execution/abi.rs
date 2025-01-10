@@ -11,7 +11,7 @@ use std::ops::Add;
 use wasmer::{AsStoreMut, AsStoreRef, FunctionEnvMut, Memory};
 
 use super::env::{get_remaining_points, sub_remaining_gas_abi, ASEnv};
-use crate::settings;
+use crate::{as_execution::ABIError, settings, VMError};
 #[cfg(feature = "execution-trace")]
 use crate::{
     into_trace_value,
@@ -212,7 +212,31 @@ pub(crate) fn assembly_script_call(
     //     param_size_update(&env, &mut ctx, &fname, param.len(), true);
     // }
 
-    let response = call_module(&mut ctx, &address, &function, &param, call_coins)?;
+    let response = match call_module(&mut ctx, &address, &function, &param, call_coins) {
+        Ok(response) => response,
+        Err(e) => match e {
+            ABIError::VMError(e) => {
+                match e {
+                    VMError::InstanceError(e) => {
+                        return Err(ABIError::VMError(VMError::InstanceError(e)));
+                    }
+                    VMError::ExecutionError {
+                        error,
+                        init_gas_cost,
+                    } => {
+                        let error = error.replace("VME:Ex:RuntimeError: ", "");
+                        return Err(ABIError::VMError(VMError::ExecutionError {
+                            error,
+                            init_gas_cost,
+                        }));
+                    }
+                };
+            }
+            _ => {
+                return Err(e);
+            }
+        },
+    };
     #[cfg(feature = "execution-trace")]
     ctx.data_mut().trace.push(AbiTrace {
         name: function_name!().to_string(),
